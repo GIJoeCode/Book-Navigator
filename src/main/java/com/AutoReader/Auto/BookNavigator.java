@@ -6,17 +6,24 @@ import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 public class BookNavigator {
+	private static final int CHUNK_SIZE = 8500; // Number of words per chunk
+
 	public static void main(String[] args) {
 		System.setProperty("webdriver.chrome.driver", "C:\\chromedriver-win64\\chromedriver.exe");
 		ChromeOptions options = new ChromeOptions();
 		options.setAcceptInsecureCerts(true);
-		options.addArguments("--headless");
+
 		WebDriver driver = new ChromeDriver(options);
-		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(15));
+		WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
 
 		try {
 			navigateSite(driver, wait);
@@ -26,93 +33,93 @@ public class BookNavigator {
 	}
 
 	private static void navigateSite(WebDriver driver, WebDriverWait wait) {
-		driver.get("https://education.launchcode.org/java-web-development/");
-		wait.until(ExpectedConditions.visibilityOfElementLocated(By.cssSelector(".toctree-l1 > a")));
+		driver.get("https://www.gutenberg.org/ebooks/search/?sort_order=downloads");
+		takeScreenshot(driver, "before_finding_books.png");
 
-		List<WebElement> chapterLinks = driver.findElements(By.cssSelector(".toctree-l1 > a"));
-		int totalChapters = chapterLinks.size();
-		System.out.println("Total chapters found: " + totalChapters);
+		try {
+			// Select the "Romeo and Juliet" book link
+			WebElement bookLink = wait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector("a[href='/ebooks/1513']")));
+			bookLink.click();
 
-		for (int chapterIndex = 0; chapterIndex < totalChapters; chapterIndex++) {
-			// Ensure chapter index is within bounds
-			if (chapterIndex >= chapterLinks.size()) {
-				System.out.println("Chapter index out of bounds: " + chapterIndex);
-				break;
+			try {
+				// Find the "Read online (web)" link in the table and click it
+				WebElement readOnlineLink = wait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector("a[href='/ebooks/1513.html.images'][title='Read online']")));
+				readOnlineLink.click();
+
+				// Wait for the book content to load and scrape the text
+				WebElement bookContent = wait.until(ExpectedConditions.presenceOfElementLocated(By.cssSelector("body")));
+				String bookText = bookContent.getText();
+
+				// Save the book content to a file
+				Files.write(Paths.get("book_content.txt"), bookText.getBytes());
+				System.out.println("Book content saved to book_content.txt");
+
+				// Summarize the book content
+				summarizeBookContent(bookText);
+
+			} catch (TimeoutException e) {
+				System.out.println("Failed to find 'Read online (web)' link within the timeout period.");
+				takeScreenshot(driver, "after_timeout_read_online.png");
 			}
 
-			WebElement chapterLink = chapterLinks.get(chapterIndex);
-			String chapterName = chapterLink.getText();
-			String chapterUrl = chapterLink.getAttribute("href");
-			System.out.println("Navigating to Chapter: " + chapterName + " (" + (chapterIndex + 1) + "/" + totalChapters + ")");
+		} catch (TimeoutException e) {
+			System.out.println("Failed to find 'Romeo and Juliet' book link within the timeout period.");
+			takeScreenshot(driver, "after_timeout_books.png");
+			throw new RuntimeException(e);
+		} catch (IOException e) {
+			System.out.println("Failed to write book content to file.");
+			e.printStackTrace();
+		}
+	}
 
-			driver.get(chapterUrl);
+	private static void summarizeBookContent(String content) {
+		List<String> chunks = splitIntoChunks(content, CHUNK_SIZE);
+		List<String> summaries = new ArrayList<>();
 
-			// Check if sections exist in the chapter
-			if (wait.until(ExpectedConditions.or(
-					ExpectedConditions.presenceOfElementLocated(By.className("section")),
-					ExpectedConditions.presenceOfElementLocated(By.tagName("body"))))) {
-
-				List<WebElement> sections = driver.findElements(By.className("section"));
-				int totalSections = sections.size();
-				System.out.println("Total sections in chapter: " + totalSections);
-
-				for (int i = 0; i < totalSections; i++) {
-					// Ensure section index is within bounds
-					if (i >= sections.size()) {
-						System.out.println("Section index out of bounds: " + i);
-						break;
-					}
-
-					WebElement section = sections.get(i);
-					System.out.println("Reading Section " + (i + 1) + " in Chapter " + chapterName + ":");
-					System.out.println(section.getText());
-
-					// Perform the second action
-					try {
-						driver.get("https://education.launchcode.org/java-web-development/chapters/introduction-and-setup/why-java.html");
-						WebElement specificParagraph = wait.until(ExpectedConditions.presenceOfElementLocated(By.id("index-1")));
-						System.out.println("Specific paragraph text: " + specificParagraph.getText());
-					} catch (NoSuchElementException e) {
-						System.out.println("Element not found: " + e.getMessage());
-					} catch (TimeoutException e) {
-						System.out.println("Timeout waiting for specific paragraph: " + e.getMessage());
-					} catch (Exception e) {
-						e.printStackTrace();
-					}
-
-					// Navigate back to the chapter page to continue reading sections
-					driver.navigate().back();
-					wait.until(ExpectedConditions.presenceOfElementLocated(By.className("section")));
-					sections = driver.findElements(By.className("section"));
-				}
-			} else {
-				System.out.println("No sections found in Chapter: " + chapterName);
+		for (String chunk : chunks) {
+			try {
+				String summary = ChatGPTSummarizer.summarize(chunk);
+				summaries.add(summary);
+			} catch (IOException e) {
+				e.printStackTrace();
 			}
+		}
 
-			// Retry navigating back to the main page if a TimeoutException occurs
-			boolean mainPageLoaded = false;
-			int attempts = 0;
-			while (!mainPageLoaded && attempts < 3) {
-				try {
-					driver.navigate().back();
-					wait.until(ExpectedConditions.visibilityOfElementLocated(By.cssSelector(".toctree-l1 > a")));
-					chapterLinks = driver.findElements(By.cssSelector(".toctree-l1 > a"));  // Re-fetch chapter links
-					totalChapters = chapterLinks.size();  // Update total chapters
-					mainPageLoaded = true;
-					System.out.println("Successfully navigated back to the main page.");
-				} catch (TimeoutException e) {
-					attempts++;
-					System.out.println("Retrying navigation back to the main page: attempt " + attempts);
-				} catch (Exception e) {
-					System.out.println("Failed to navigate back to the main page: " + e.getMessage());
-					break;
-				}
-			}
+		String finalSummary = String.join(" ", summaries);
+		System.out.println("Final Summary:");
+		System.out.println(finalSummary);
 
-			if (!mainPageLoaded) {
-				System.out.println("Failed to navigate back to the main page after 3 attempts");
-				break;
+		try {
+			Files.write(Paths.get("summary.txt"), finalSummary.getBytes());
+			System.out.println("Summary saved to summary.txt");
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private static List<String> splitIntoChunks(String text, int chunkSizeWords) {
+		List<String> chunks = new ArrayList<>();
+		String[] words = text.split("\\s+");
+		int length = words.length;
+		for (int i = 0; i < length; i += chunkSizeWords) {
+			StringBuilder chunk = new StringBuilder();
+			for (int j = i; j < Math.min(length, i + chunkSizeWords); j++) {
+				chunk.append(words[j]).append(" ");
 			}
+			chunks.add(chunk.toString().trim());
+		}
+		return chunks;
+	}
+
+	// Utility method to take screenshots
+	private static void takeScreenshot(WebDriver driver, String fileName) {
+		TakesScreenshot ts = (TakesScreenshot) driver;
+		File source = ts.getScreenshotAs(OutputType.FILE);
+		String timestamp = String.valueOf(System.currentTimeMillis());
+		try {
+			Files.copy(source.toPath(), Paths.get(fileName.replace(".png", "_" + timestamp + ".png")));
+		} catch (IOException e) {
+			e.printStackTrace();
 		}
 	}
 }
